@@ -1,0 +1,12 @@
+[package]
+name = "kstat-rs"
+version = "0.1.0"
+authors = ["Benjamin Naecker <ben@oxide.computer>"]
+edition = "2018"
+
+[dependencies]
+libc = "0.2"
+thiserror = "1"
+
+[dev-dependencies]
+subprocess = "0.2"
