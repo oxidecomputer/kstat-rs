@@ -553,10 +553,7 @@ mod test {
                 items,
                 kstat_items
             );
-            const SKIPPED_STATS: &[&'static str] = &[
-                "current_clock_Hz",
-                "current_cstate",
-            ];
+            const SKIPPED_STATS: &[&'static str] = &["current_clock_Hz", "current_cstate"];
             for (key, value) in kstat_items.iter() {
                 let name = key.split(':').last().expect("Expected to split on ':'");
                 if SKIPPED_STATS.contains(&name) {
