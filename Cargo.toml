@@ -3,6 +3,9 @@ name = "kstat-rs"
 version = "0.1.0"
 authors = ["Benjamin Naecker <ben@oxide.computer>"]
 edition = "2018"
+license = "Apache-2.0"
+description = "Rust interface to illumos's libkstat"
+repository = "https://github.com/oxidecomputer/kstat-rs"
 
 [dependencies]
 libc = "0.2"
