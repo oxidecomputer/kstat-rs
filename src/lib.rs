@@ -50,7 +50,7 @@ pub enum Error {
 ///
 /// Users instantiate a control handle and access the kstat's it contains, for example via the
 /// [`Ctl::iter`] method.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Ctl {
     ctl: *mut sys::kstat_ctl_t,
 }
@@ -136,7 +136,7 @@ impl Drop for Ctl {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Iter<'a> {
     kstat: *mut sys::kstat_t,
     _d: PhantomData<&'a ()>,
@@ -161,7 +161,7 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 /// `Kstat` represents a single kernel statistic.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct Kstat<'a> {
     pub ks_crtime: f64,
     pub ks_snaptime: f64,
@@ -283,7 +283,7 @@ impl TryFrom<u8> for NamedType {
 }
 
 /// Data from a single kstat.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Data<'a> {
     Raw(Vec<&'a [u8]>),
     Named(Vec<Named<'a>>),
@@ -412,13 +412,13 @@ impl TryFrom<&*const sys::kstat_intr_t> for Intr {
 }
 
 /// A name/value data element from a named kernel statistic.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct Named<'a> {
     pub name: &'a str,
     pub value: NamedData<'a>,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub enum NamedData<'a> {
     Char(&'a [u8]),
     Int32(i32),
