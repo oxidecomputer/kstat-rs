@@ -16,5 +16,8 @@ rustc --version
 
 export RUST_BACKTRACE=1
 
+banner fmt
+ptime -m cargo fmt -- --check
+
 banner test
 ptime -m cargo test --release --no-fail-fast --verbose

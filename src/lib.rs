@@ -558,6 +558,8 @@ mod test {
                 let item = items
                     .get(name)
                     .expect(&format!("Expected a name/value pair with name '{}'", name));
+                println!("key: {:#?}\nvalue: {:#?}", key, value);
+                println!("item: {:#?}", item);
                 match item.value {
                     NamedData::Char(slice) => {
                         for (sl, by) in slice.iter().zip(value.as_bytes().iter()) {
