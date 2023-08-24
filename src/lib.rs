@@ -14,14 +14,14 @@
 //! are captured by the [`Data`] enum, which can be read and returned by using the [`Ctl::read`]
 //! method.
 
-// Copyright 2021 Oxide Computer Company
-// 
+// Copyright 2023 Oxide Computer Company
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// 
+//
 //     http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -474,7 +474,6 @@ impl<'a> TryFrom<&'a sys::kstat_named_t> for Named<'a> {
                 value: NamedData::UInt64(unsafe { k.value.ui64 }),
             }),
             NamedType::String => {
-                use std::convert::TryInto;
                 let s = (&unsafe { k.value.str }).try_into()?;
                 Ok(Named {
                     name,

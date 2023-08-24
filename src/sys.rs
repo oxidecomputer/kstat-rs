@@ -1,13 +1,13 @@
 //! Sys-bindings to `libkstat`.
 
-// Copyright 2021 Oxide Computer Company
-// 
+// Copyright 2023 Oxide Computer Company
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// 
+//
 //     http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -172,7 +172,7 @@ pub fn kstat_data_raw(kstat: &kstat_t) -> Vec<&[u8]> {
         let mut out = Vec::with_capacity(n_data);
         for _ in 0..kstat.ks_ndata {
             out.push(unsafe { std::slice::from_raw_parts(start, item_size) });
-            start = unsafe { start.offset(item_size as _) };
+            start = unsafe { start.add(item_size) };
         }
         out
     }
@@ -201,7 +201,7 @@ pub fn kstat_data_timer(kstat: &kstat_t) -> &[kstat_timer_t] {
 // Read a list of name-value kstats from the given kstat
 pub fn kstat_data_named(kstat: &kstat_t) -> &[kstat_named_t] {
     let reported_count = kstat.ks_ndata as usize;
-    let actual_count = kstat.ks_data_size as usize / size_of::<kstat_named_t>();
+    let actual_count = kstat.ks_data_size / size_of::<kstat_named_t>();
     let count = reported_count.min(actual_count);
     unsafe { std::slice::from_raw_parts(kstat.ks_data as *const _, count) }
 }
@@ -215,7 +215,7 @@ extern "C" {
 }
 
 // Helper to convert a Kstat string array to a &str.
-pub(crate) fn array_to_cstr<'a>(s: &'a [c_char; KSTAT_STRLEN]) -> Result<&'a str, Error> {
+pub(crate) fn array_to_cstr(s: &[c_char; KSTAT_STRLEN]) -> Result<&str, Error> {
     unsafe { CStr::from_ptr(s.as_ptr() as *const _) }
         .to_str()
         .map_err(|_| Error::InvalidString)
