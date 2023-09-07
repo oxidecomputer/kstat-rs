@@ -177,6 +177,8 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
+unsafe impl<'a> Send for Iter<'a> {}
+
 /// `Kstat` represents a single kernel statistic.
 #[derive(Debug)]
 pub struct Kstat<'a> {
@@ -189,6 +191,8 @@ pub struct Kstat<'a> {
     pub ks_class: &'a str,
     ks: *mut sys::kstat_t,
 }
+
+unsafe impl<'a> Send for Kstat<'a> {}
 
 impl<'a> Kstat<'a> {
     fn read(&mut self, ctl: *mut sys::kstat_ctl_t) -> Result<(), Error> {
