@@ -1,6 +1,6 @@
 [package]
 name = "kstat-rs"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Benjamin Naecker <ben@oxide.computer>"]
 edition = "2021"
 license = "Apache-2.0"

@@ -67,6 +67,11 @@ pub struct Ctl {
     ctl: *mut sys::kstat_ctl_t,
 }
 
+/// The `Ctl` wraps a raw pointer allocated by the `libkstat(3KSTAT)` library.
+/// This itself isn't thread-safe, but doesn't refer to any thread-local state.
+/// So it's safe to send across threads.
+unsafe impl Send for Ctl {}
+
 impl Ctl {
     /// Create a new `Ctl`.
     pub fn new() -> Result<Self, Error> {
