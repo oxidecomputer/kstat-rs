@@ -28,6 +28,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ord;
+use std::cmp::Ordering;
+use std::cmp::PartialOrd;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 use thiserror::Error;
@@ -89,10 +92,10 @@ impl Ctl {
     /// and updates a control object, bringing it into sync with the kernel's copy.
     pub fn update(self) -> Result<Self, Error> {
         let kid = unsafe { sys::kstat_chain_update(self.ctl) };
-        if kid == 0 {
-            Ok(self)
-        } else {
+        if kid == -1 {
             Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(self)
         }
     }
 
@@ -180,16 +183,42 @@ impl<'a> Iterator for Iter<'a> {
 unsafe impl<'a> Send for Iter<'a> {}
 
 /// `Kstat` represents a single kernel statistic.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Kstat<'a> {
-    pub ks_crtime: f64,
-    pub ks_snaptime: f64,
+    /// The creation time of the stat, in nanoseconds.
+    pub ks_crtime: i64,
+    /// The time of the last update, in nanoseconds.
+    pub ks_snaptime: i64,
+    /// The module of the kstat.
     pub ks_module: &'a str,
+    /// The instance of the kstat.
     pub ks_instance: i32,
+    /// The name of the kstat.
     pub ks_name: &'a str,
+    /// The type of the kstat.
     pub ks_type: Type,
+    /// The class of the kstat.
     pub ks_class: &'a str,
     ks: *mut sys::kstat_t,
+}
+
+impl<'a> PartialOrd for Kstat<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(
+            self.ks_class
+                .cmp(other.ks_class)
+                .then_with(|| self.ks_module.cmp(other.ks_module))
+                .then_with(|| self.ks_instance.cmp(&other.ks_instance))
+                .then_with(|| self.ks_name.cmp(other.ks_name))
+                .then_with(|| self.ks_class.cmp(other.ks_name)),
+        )
+    }
+}
+
+impl<'a> Ord for Kstat<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
 }
 
 unsafe impl<'a> Send for Kstat<'a> {}
@@ -199,7 +228,7 @@ impl<'a> Kstat<'a> {
         if unsafe { sys::kstat_read(ctl, self.ks, std::ptr::null_mut()) } == -1 {
             Err(std::io::Error::last_os_error().into())
         } else {
-            self.ks_snaptime = unsafe { (*self.ks).ks_snaptime } as f64 * 1e-9;
+            self.ks_snaptime = unsafe { (*self.ks).ks_snaptime };
             Ok(())
         }
     }
@@ -230,8 +259,8 @@ impl<'a> TryFrom<&'a sys::kstat_t> for Kstat<'a> {
     type Error = Error;
     fn try_from(k: &'a sys::kstat_t) -> Result<Self, Self::Error> {
         Ok(Kstat {
-            ks_crtime: k.ks_crtime as f64 * 1e-9,
-            ks_snaptime: k.ks_snaptime as f64 * 1e-9,
+            ks_crtime: k.ks_crtime,
+            ks_snaptime: k.ks_snaptime,
             ks_module: sys::array_to_cstr(&k.ks_module)?,
             ks_instance: k.ks_instance,
             ks_name: sys::array_to_cstr(&k.ks_name)?,
@@ -254,7 +283,7 @@ impl<'a> TryFrom<&'a *mut sys::kstat_t> for Kstat<'a> {
 }
 
 /// The type of a kstat.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Type {
     Raw,
     Named,
@@ -304,7 +333,7 @@ impl TryFrom<u8> for NamedType {
 }
 
 /// Data from a single kstat.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Data<'a> {
     Raw(Vec<&'a [u8]>),
     Named(Vec<Named<'a>>),
@@ -433,13 +462,21 @@ impl TryFrom<&*const sys::kstat_intr_t> for Intr {
 }
 
 /// A name/value data element from a named kernel statistic.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Named<'a> {
     pub name: &'a str,
     pub value: NamedData<'a>,
 }
 
-#[derive(Debug)]
+impl<'a> Named<'a> {
+    /// Return the data type of a named kernel statistic.
+    pub fn data_type(&self) -> NamedType {
+        self.value.data_type()
+    }
+}
+
+/// The value part of a name-value kernel statistic.
+#[derive(Clone, Debug)]
 pub enum NamedData<'a> {
     Char(&'a [u8]),
     Int32(i32),
@@ -447,6 +484,20 @@ pub enum NamedData<'a> {
     Int64(i64),
     UInt64(u64),
     String(&'a str),
+}
+
+impl<'a> NamedData<'a> {
+    /// Return the data type of a named kernel statistic.
+    pub fn data_type(&self) -> NamedType {
+        match self {
+            NamedData::Char(_) => NamedType::Char,
+            NamedData::Int32(_) => NamedType::Int32,
+            NamedData::UInt32(_) => NamedType::UInt32,
+            NamedData::Int64(_) => NamedType::Int64,
+            NamedData::UInt64(_) => NamedType::UInt64,
+            NamedData::String(_) => NamedType::String,
+        }
+    }
 }
 
 impl<'a> TryFrom<&'a sys::kstat_named_t> for Named<'a> {
@@ -542,19 +593,22 @@ mod test {
                     );
                     let (id, value) = (parts[0], parts[1]);
                     if id.ends_with("crtime") {
-                        let crtime: f64 = value.parse().expect("Expected a floating-point crtime");
+                        let crtime: f64 = value.parse().expect("Expected a crtime in nanoseconds");
+                        let crtime = (crtime * 1e9) as i64;
                         assert!(
-                            (crtime - kstat.ks_crtime).abs() < 1e-8,
-                            "Expected similar crtimes"
+                            (crtime - kstat.ks_crtime) < 5 || (kstat.ks_crtime - crtime) < 5,
+                            "Expected nearly equal crtimes"
                         );
                         // Don't push this value
                         None
                     } else if id.ends_with("snaptime") {
                         let snaptime: f64 =
-                            value.parse().expect("Expected a floating-point snaptime");
+                            value.parse().expect("Expected a snaptime in nanoseconds");
+                        let snaptime = (snaptime * 1e9) as i64;
                         assert!(
-                            (snaptime - kstat.ks_snaptime).abs() < 1e-1,
-                            "Expected similar snaptime"
+                            (snaptime - kstat.ks_snaptime) < 5
+                                || (kstat.ks_snaptime - snaptime) < 5,
+                            "Expected nearly equal snaptimes"
                         );
                         // Don't push this value
                         None
