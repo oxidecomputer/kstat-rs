@@ -34,6 +34,9 @@ use std::cmp::PartialOrd;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 use thiserror::Error;
+use std::collections::BTreeMap;
+use std::cell::Cell;
+use std::cell::RefCell;
 
 mod sys;
 
@@ -59,6 +62,28 @@ pub enum Error {
     /// Error bubbled up from operating on `libkstat`.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("Tracking function matches zero kstats")]
+    NoTrackedKstats,
+
+    #[error("Invalid tracking ID")]
+    InvalidTrackingId,
+}
+
+/// An ID used to refer to tracked kernel statistics.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TrackingId(u64);
+
+// A set of tracked kstats, those matching a tracking function.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct TrackedKstats<'a> {
+    // The ID of these tracked stats.
+    id: TrackingId,
+    // A function returning true for kstats that should be tracked
+    track_fn: fn(Kstat<'a>) -> bool,
+    // The current set of tracked stats.
+    kstats: Vec<Kstat<'a>>,
 }
 
 /// `Ctl` is a handle to the kstat library.
@@ -66,23 +91,25 @@ pub enum Error {
 /// Users instantiate a control handle and access the kstat's it contains, for example via the
 /// [`Ctl::iter`] method.
 #[derive(Debug)]
-pub struct Ctl {
+pub struct Ctl<'a> {
     ctl: *mut sys::kstat_ctl_t,
+    tracking_id: Cell<TrackingId>,
+    tracked_kstats: RefCell<BTreeMap<TrackingId, TrackedKstats<'a>>>,
 }
 
 /// The `Ctl` wraps a raw pointer allocated by the `libkstat(3KSTAT)` library.
 /// This itself isn't thread-safe, but doesn't refer to any thread-local state.
 /// So it's safe to send across threads.
-unsafe impl Send for Ctl {}
+unsafe impl Send for Ctl<'_> {}
 
-impl Ctl {
+impl<'a> Ctl<'a> {
     /// Create a new `Ctl`.
     pub fn new() -> Result<Self, Error> {
         let ctl = unsafe { sys::kstat_open() };
         if ctl.is_null() {
             Err(std::io::Error::last_os_error().into())
         } else {
-            Ok(Ctl { ctl })
+            Ok(Ctl { ctl, tracking_id: Cell::new(TrackingId(0)), tracked_kstats: RefCell::new(BTreeMap::new()) })
         }
     }
 
@@ -93,25 +120,66 @@ impl Ctl {
     pub fn update(self) -> Result<Self, Error> {
         let kid = unsafe { sys::kstat_chain_update(self.ctl) };
         if kid == -1 {
-            Err(std::io::Error::last_os_error().into())
-        } else {
-            Ok(self)
+            return Err(std::io::Error::last_os_error().into());
+        } else if kid > 0 {
+            for tracked in self.tracked_kstats.borrow_mut().values_mut() {
+                tracked.kstats.clear();
+                for k in self.iter() {
+                    if (tracked.track_fn)(k) {
+                        tracked.kstats.push(k);
+                    }
+                }
+            }
         }
+        Ok(self)
     }
 
     /// Return an iterator over the [`Kstat`]s in `self`.
     ///
     /// Note that this will only return `Kstat`s which are successfully read. For example, it will
     /// ignore those with non-UTF-8 names.
-    pub fn iter(&self) -> Iter<'_> {
+    pub fn iter<'b>(&self) -> Iter<'b>
+    where
+        'a: 'b
+    {
         Iter {
             kstat: unsafe { (*self.ctl).kc_chain },
             _d: PhantomData,
         }
     }
 
+    /// Request tracking for kstats which return `true` from a closure.
+    pub fn track(&mut self, track_fn: fn(Kstat<'a>) -> bool) -> Result<TrackingId, Error> {
+        let kstats: Vec<_> = self.iter().filter(|k| track_fn(*k)).collect();
+        if kstats.is_empty() {
+            return Err(Error::NoTrackedKstats);
+        }
+        let id = self.tracking_id.get();
+        self.tracking_id.set(TrackingId(id.0 + 1));
+        let tracked_kstats = TrackedKstats {
+            id,
+            track_fn,
+            kstats,
+        };
+        assert!(self.tracked_kstats.borrow_mut().insert(id, tracked_kstats).is_none());
+        Ok(id)
+    }
+
+    /// Stop tracking the kstats matching the provided ID.
+    pub fn stop_tracking(&mut self, id: &TrackingId) {
+        self.tracked_kstats.borrow_mut().remove(id);
+    }
+
+    /// Return the set of tracked stats matching the provided ID.
+    pub fn fetch_tracked(&self, id: &TrackingId) -> Result<Vec<Kstat<'a>>, Error> {
+        match self.tracked_kstats.borrow().get(id) {
+            None => Err(Error::InvalidTrackingId),
+            Some(s) => Ok(s.kstats.clone()),
+        }
+    }
+
     /// Read a [`Kstat`], returning the data for it.
-    pub fn read<'a>(&self, kstat: &mut Kstat<'a>) -> Result<Data<'a>, Error> {
+    pub fn read(&self, kstat: &mut Kstat<'a>) -> Result<Data<'a>, Error> {
         kstat.read(self.ctl)?;
         kstat.data()
     }
@@ -119,12 +187,12 @@ impl Ctl {
     /// Find [`Kstat`]s by module, instance, and/or name.
     ///
     /// If a field is `None`, any matching `Kstat` is returned.
-    pub fn filter<'a>(
-        &'a self,
+    pub fn filter(
+        &self,
         module: Option<&'a str>,
         instance: Option<i32>,
         name: Option<&'a str>,
-    ) -> impl Iterator<Item = Kstat<'a>> {
+    ) -> impl Iterator<Item = Kstat<'a>> + 'a {
         self.iter().filter_map(move |kstat| {
             fn should_include<T>(inner: &T, cmp: &Option<T>) -> bool
             where
@@ -148,7 +216,7 @@ impl Ctl {
     }
 }
 
-impl Drop for Ctl {
+impl Drop for Ctl<'_> {
     fn drop(&mut self) {
         unsafe {
             sys::kstat_close(self.ctl);
@@ -156,6 +224,7 @@ impl Drop for Ctl {
     }
 }
 
+/// An iterator over all [`Kstat`] on a chain.
 #[derive(Debug)]
 pub struct Iter<'a> {
     kstat: *mut sys::kstat_t,
@@ -656,5 +725,48 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_tracking() {
+        let mut ctl = Ctl::new().expect("Failed to create kstat control");
+        let track = |kstat: Kstat| {
+            kstat.ks_module == "link" &&
+                kstat.ks_instance == 0 &&
+                kstat.ks_name == "igb0"
+        };
+        let id = ctl.track(track).unwrap();
+        for mut st in ctl.fetch_tracked(&id).unwrap() {
+            let Data::Named(named) = ctl.read(&mut st).unwrap() else {
+                panic!();
+            };
+            println!("{:#?}", named.iter().find(|n| n.name == "rbytes64").unwrap());
+        }
+        let ctl = ctl.update().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        for mut st in ctl.fetch_tracked(&id).unwrap() {
+            let Data::Named(named) = ctl.read(&mut st).unwrap() else {
+                panic!();
+            };
+            println!("{:#?}", named.iter().find(|n| n.name == "rbytes64").unwrap());
+        }
+
+        let mut d = std::time::Duration::ZERO;
+        const ITERS: u32 = 10_000;
+        for _ in 0..ITERS {
+            let start = std::time::Instant::now();
+            ctl.fetch_tracked(&id).unwrap();
+            d += start.elapsed();
+        }
+        println!("{:?}", d / ITERS);
+
+
+        let mut d = std::time::Duration::ZERO;
+        for _ in 0..ITERS {
+            let start = std::time::Instant::now();
+            ctl.filter(Some("link"), Some(0), Some("igb0")).next().unwrap();
+            d += start.elapsed();
+        }
+        println!("{:?}", d / ITERS);
     }
 }
