@@ -78,12 +78,7 @@ unsafe impl Send for Ctl {}
 impl Ctl {
     /// Create a new `Ctl`.
     pub fn new() -> Result<Self, Error> {
-        let ctl = unsafe { sys::kstat_open() };
-        if ctl.is_null() {
-            Err(std::io::Error::last_os_error().into())
-        } else {
-            Ok(Ctl { ctl })
-        }
+        sys::open().map(|ctl| Ctl { ctl })
     }
 
     /// Synchronize this `Ctl` with the kernel's view of the data.
@@ -91,12 +86,7 @@ impl Ctl {
     /// A `Ctl` is really a snapshot of the kernel's internal list of kstats. This method consumes
     /// and updates a control object, bringing it into sync with the kernel's copy.
     pub fn update(self) -> Result<Self, Error> {
-        let kid = unsafe { sys::kstat_chain_update(self.ctl) };
-        if kid == -1 {
-            Err(std::io::Error::last_os_error().into())
-        } else {
-            Ok(self)
-        }
+        sys::update(self.ctl).map(|_| self)
     }
 
     /// Return an iterator over the [`Kstat`]s in `self`.
@@ -125,7 +115,7 @@ impl Ctl {
         instance: Option<i32>,
         name: Option<&'a str>,
     ) -> impl Iterator<Item = Kstat<'a>> {
-        self.iter().filter_map(move |kstat| {
+        self.iter().filter(move |kstat| {
             fn should_include<T>(inner: &T, cmp: &Option<T>) -> bool
             where
                 T: PartialEq,
@@ -136,23 +126,16 @@ impl Ctl {
                     true // Include if this comparator is None
                 }
             }
-            let include = should_include(&kstat.ks_module, &module)
+            should_include(&kstat.ks_module, &module)
                 && should_include(&kstat.ks_instance, &instance)
-                && should_include(&kstat.ks_name, &name);
-            if include {
-                Some(kstat)
-            } else {
-                None
-            }
+                && should_include(&kstat.ks_name, &name)
         })
     }
 }
 
 impl Drop for Ctl {
     fn drop(&mut self) {
-        unsafe {
-            sys::kstat_close(self.ctl);
-        }
+        let _ = sys::close(self.ctl);
     }
 }
 
@@ -202,6 +185,7 @@ pub struct Kstat<'a> {
     ks: *mut sys::kstat_t,
 }
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl<'a> PartialOrd for Kstat<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(
@@ -225,12 +209,9 @@ unsafe impl<'a> Send for Kstat<'a> {}
 
 impl<'a> Kstat<'a> {
     fn read(&mut self, ctl: *mut sys::kstat_ctl_t) -> Result<(), Error> {
-        if unsafe { sys::kstat_read(ctl, self.ks, std::ptr::null_mut()) } == -1 {
-            Err(std::io::Error::last_os_error().into())
-        } else {
-            self.ks_snaptime = unsafe { (*self.ks).ks_snaptime };
-            Ok(())
-        }
+        sys::read(ctl, self.ks, std::ptr::null_mut())?;
+        self.ks_snaptime = unsafe { (*self.ks).ks_snaptime };
+        Ok(())
     }
 
     fn data(&self) -> Result<Data<'a>, Error> {
@@ -507,7 +488,7 @@ impl<'a> TryFrom<&'a sys::kstat_named_t> for Named<'a> {
         match NamedType::try_from(k.data_type)? {
             NamedType::Char => {
                 let slice = unsafe {
-                    let p = k.value.charc.as_ptr() as *const u8;
+                    let p = k.value.charc.as_ptr();
                     let len = k.value.charc.len();
                     std::slice::from_raw_parts(p, len)
                 };
@@ -544,7 +525,7 @@ impl<'a> TryFrom<&'a sys::kstat_named_t> for Named<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "illumos"))]
 mod test {
     use super::*;
     use std::collections::BTreeMap;

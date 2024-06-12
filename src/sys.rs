@@ -206,13 +206,84 @@ pub fn kstat_data_named(kstat: &kstat_t) -> &[kstat_named_t] {
     unsafe { std::slice::from_raw_parts(kstat.ks_data as *const _, count) }
 }
 
-#[link(name = "kstat")]
-extern "C" {
-    pub fn kstat_open() -> *mut kstat_ctl_t;
-    pub fn kstat_close(_: *mut kstat_ctl_t) -> i32;
-    pub fn kstat_read(_: *mut kstat_ctl_t, _: *mut kstat_t, _: *mut c_void) -> kid_t;
-    pub fn kstat_chain_update(_: *mut kstat_ctl_t) -> kid_t;
+#[cfg(target_os = "illumos")]
+mod sys_impl {
+    use super::*;
+
+    #[link(name = "kstat")]
+    extern "C" {
+        pub fn kstat_open() -> *mut kstat_ctl_t;
+        pub fn kstat_close(_: *mut kstat_ctl_t) -> i32;
+        pub fn kstat_read(_: *mut kstat_ctl_t, _: *mut kstat_t, _: *mut c_void) -> kid_t;
+        pub fn kstat_chain_update(_: *mut kstat_ctl_t) -> kid_t;
+    }
+
+    pub fn open() -> Result<*mut kstat_ctl_t, Error> {
+        let ctl = unsafe { kstat_open() };
+        if ctl.is_null() {
+            Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(ctl)
+        }
+    }
+
+    pub fn close(ctl: *mut kstat_ctl_t) -> Result<(), Error> {
+        let kid = unsafe { kstat_close(ctl) };
+        if kid == -1 {
+            Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn read(ctl: *mut kstat_ctl_t, kstat: *mut kstat_t, kid: *mut c_void) -> Result<(), Error> {
+        if unsafe { kstat_read(ctl, kstat, kid) } == -1 {
+            Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn update(ctl: *mut kstat_ctl_t) -> Result<kid_t, Error> {
+        let kid = unsafe { kstat_chain_update(ctl) };
+        if kid == -1 {
+            Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(kid)
+        }
+    }
 }
+
+#[cfg(not(target_os = "illumos"))]
+mod sys_impl {
+    use super::*;
+
+    #[inline(always)]
+    fn notsup() -> Error {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "kstats are only supported on illumos",
+        ))
+    }
+
+    pub fn open() -> Result<*mut kstat_ctl_t, Error> {
+        Err(notsup())
+    }
+
+    pub fn close(_: *mut kstat_ctl_t) -> Result<(), Error> {
+        Err(notsup())
+    }
+
+    pub fn read(_: *mut kstat_ctl_t, _: *mut kstat_t, _: *mut c_void) -> Result<(), Error> {
+        Err(notsup())
+    }
+
+    pub fn update(_: *mut kstat_ctl_t) -> Result<kid_t, Error> {
+        Err(notsup())
+    }
+}
+
+pub use sys_impl::*;
 
 // Helper to convert a Kstat string array to a &str.
 pub(crate) fn array_to_cstr(s: &[c_char; KSTAT_STRLEN]) -> Result<&str, Error> {
@@ -221,39 +292,14 @@ pub(crate) fn array_to_cstr(s: &[c_char; KSTAT_STRLEN]) -> Result<&str, Error> {
         .map_err(|_| Error::InvalidString)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "illumos"))]
 mod test {
     use super::*;
 
     #[test]
     fn test_kstat_ctl() {
-        let ctl = unsafe { kstat_open() };
+        let ctl = open().expect("Failed to open kstat_ctl");
         assert!(!ctl.is_null());
-        assert_eq!(unsafe { kstat_close(ctl) }, 0);
+        close(ctl).expect("Failed to close kstat_ctl");
     }
-
-    /*
-    #[test]
-    fn foo() {
-        let ctl = unsafe { kstat_open() };
-        let mut kstat = unsafe { (*ctl).kc_chain };
-        while !kstat.is_null() {
-            let kid = unsafe { kstat_read(ctl, kstat, std::ptr::null_mut()) };
-            let ks = unsafe { kstat.as_ref() }.unwrap();
-            if kid == -1 {
-                println!("ERR: {}", std::io::Error::last_os_error());
-            } else {
-                let ty = Type::try_from(ks.ks_type).unwrap();
-                if matches!(ty, Type::Io) {
-                    let data = Io::from(kstat_data_io(ks));
-                    println!("name: {}\n{:#?}", array_to_cstr(&ks.ks_name).unwrap(), data);
-                } else if matches!(ty, Type::Named) {
-                    let data = kstat_data_named(ks).iter().map(|d| Named::try_from(d).unwrap()).collect::<Vec<_>>();
-                    println!("{:#?}", data);
-                }
-            }
-            kstat = ks.ks_next;
-        }
-    }
-    */
 }
