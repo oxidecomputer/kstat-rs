@@ -208,6 +208,21 @@ impl<'a> Ord for Kstat<'a> {
 unsafe impl<'a> Send for Kstat<'a> {}
 
 impl<'a> Kstat<'a> {
+    /// Construct a `Kstat` without an underlying `kstat_t`. Used for testing
+    /// purposes only.
+    pub fn with_null_kstat(ks_module: &'a str, ks_instance: i32, ks_name: &'a str) -> Self {
+        Self {
+            ks_crtime: 0,
+            ks_snaptime: 0,
+            ks_module,
+            ks_instance,
+            ks_name,
+            ks_type: Type::Named,
+            ks_class: "",
+            ks: std::ptr::null_mut(),
+        }
+    }
+
     fn read(&mut self, ctl: *mut sys::kstat_ctl_t) -> Result<(), Error> {
         sys::read(ctl, self.ks, std::ptr::null_mut())?;
         self.ks_snaptime = unsafe { (*self.ks).ks_snaptime };
