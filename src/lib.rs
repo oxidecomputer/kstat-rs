@@ -609,6 +609,7 @@ mod test {
                         // Don't push this value
                         None
                     } else if id.ends_with("class") {
+                        assert_eq!(kstat.ks_class, value);
                         // Don't push this value
                         None
                     } else {
