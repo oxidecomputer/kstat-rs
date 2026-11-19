@@ -261,7 +261,7 @@ impl<'a> TryFrom<&'a sys::kstat_t> for Kstat<'a> {
             ks_instance: k.ks_instance,
             ks_name: sys::array_to_cstr(&k.ks_name)?,
             ks_type: Type::try_from(k.ks_type)?,
-            ks_class: sys::array_to_cstr(&k.ks_name)?,
+            ks_class: sys::array_to_cstr(&k.ks_class)?,
             ks: k as *const _ as *mut _,
         })
     }
@@ -609,6 +609,7 @@ mod test {
                         // Don't push this value
                         None
                     } else if id.ends_with("class") {
+                        assert_eq!(kstat.ks_class, value);
                         // Don't push this value
                         None
                     } else {
